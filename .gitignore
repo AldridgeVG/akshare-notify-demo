@@ -1,0 +1,75 @@
+### PyCharm / IntelliJ IDEA ###
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+
+### Python ###
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+### Virtual Environments ###
+venv/
+ENV/
+env/
+.venv
+.env
+.venv/
+
+### Jupyter ###
+.ipynb_checkpoints
+
+### Testing ###
+.tox/
+.nox/
+.coverage
+.pytest_cache/
+htmlcov/
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
+
+### MyPy ###
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+### Ruff ###
+.ruff_cache/
+
+### VS Code ###
+.vscode/
+
+### Node.js ###
+node_modules/
+
+### macOS ###
+.DS_Store
+
+### Claude ###
+.claude/settings.local.json
+
+### Project Specific ###
+logs/
+.gitnexus
