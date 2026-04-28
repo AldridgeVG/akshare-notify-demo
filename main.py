@@ -6,6 +6,8 @@ import argparse
 import logging
 import sys
 import time
+from datetime import datetime
+from pathlib import Path
 
 import akshare as ak
 
@@ -18,6 +20,8 @@ from macd_monitor_518880 import (
     detect_kdj_signals, detect_volume_signals,
     calculate_comprehensive_score, generate_comprehensive_advice,
 )
+
+LOG_DIR = Path("logs")
 
 
 def parse_args() -> argparse.Namespace:
@@ -38,38 +42,70 @@ def parse_args() -> argparse.Namespace:
 
 
 def setup_logger(code: str) -> logging.Logger:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
+    """配置日志：统一输出到 logs/ 目录，并覆盖默认 root logger。"""
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = LOG_DIR / f"monitor_{code}.log"
+
+    root = logging.getLogger()
+    # 清除已有 handlers，避免 macd_monitor_518880 模块的 basicConfig 干扰
+    for handler in root.handlers[:]:
+        root.removeHandler(handler)
+        handler.close()
+
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
-        handlers=[
-            logging.FileHandler(f"monitor_{code}.log", encoding="utf-8"),
-            logging.StreamHandler(sys.stdout),
-        ],
     )
+
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+
+    stream_handler = logging.StreamHandler(sys.stdout)
+    stream_handler.setFormatter(formatter)
+
+    root.setLevel(logging.INFO)
+    root.addHandler(file_handler)
+    root.addHandler(stream_handler)
+
     return logging.getLogger("ETF_Monitor")
 
 
+def _log_block(logger: logging.Logger, lines: list[str]) -> None:
+    """逐行记录，确保每行都有时间戳前缀。"""
+    for line in lines:
+        logger.info(line)
+
+
 def run_check(symbol: str, name: str, history_days: int, logger: logging.Logger) -> None:
-    """执行一次完整的指标检测并输出建议。"""
+    """执行一次完整的指标检测，并以清晰排版输出结果。"""
     hist_df = fetch_history_daily(symbol, history_days)
 
+    # 实时价格
     spot = fetch_spot_price(symbol)
     if spot is not None:
         latest_price, data_date_str, data_time_str = spot
-        logger.info(f"实时价格: {latest_price:.3f} | 时间: {data_date_str} {data_time_str}")
+        price_info = (
+            f"实时价格: {latest_price:.3f}  |  "
+            f"数据时间: {data_date_str} {data_time_str}"
+        )
         hist_df = hist_df.copy()
         hist_df.loc[hist_df.index[-1], "close"] = latest_price
+    else:
+        latest_price = hist_df["close"].iloc[-1]
+        price_info = f"实时价格: 未获取  |  最新收盘: {latest_price:.3f}"
 
+    # 计算指标
     macd_df = compute_macd(hist_df["close"], MACD_FAST, MACD_SLOW, MACD_SIGNAL)
     kdj_df = compute_kdj(hist_df, KDJ_N, KDJ_M1, KDJ_M2)
     vol_info = compute_volume_signals(hist_df, VOL_MA_DAYS)
 
+    # 检测信号
     bar_signal = detect_significant_bar(macd_df)
     div_signal = detect_divergence(macd_df)
     kdj_signal, kdj_div = detect_kdj_signals(kdj_df, hist_df)
     vol_signal = detect_volume_signals(hist_df, vol_info)
 
+    # 综合评分
     score, score_desc, reasons = calculate_comprehensive_score(
         macd_df, bar_signal, div_signal,
         kdj_df, kdj_signal, kdj_div,
@@ -77,33 +113,42 @@ def run_check(symbol: str, name: str, history_days: int, logger: logging.Logger)
     )
     advice = generate_comprehensive_advice(score, score_desc, reasons)
 
-    label = f"{symbol}({name})" if name else symbol
+    # 最新值
     latest_macd = macd_df.iloc[-1]
     latest_kdj = kdj_df.iloc[-1]
     latest_vol = vol_info.iloc[-1]
+    latest_hist = hist_df.iloc[-1]
 
-    logger.info(
-        f"[{label}] MACD | DIF={latest_macd['DIF']:.4f} "
-        f"DEA={latest_macd['DEA']:.4f} HIST={latest_macd['MACD_HIST']:.4f}"
-    )
-    logger.info(
-        f"[{label}] KDJ  | K={latest_kdj['K']:.2f} "
-        f"D={latest_kdj['D']:.2f} J={latest_kdj['J']:.2f}"
-    )
-    logger.info(f"[{label}] VOL  | 量比={latest_vol['VOL_RATIO']:.2f}")
+    label = f"{symbol}({name})" if name else symbol
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    if bar_signal:
-        logger.info(f"【MACD柱体】{bar_signal}")
-    if div_signal:
-        logger.info(f"【MACD背离】{div_signal}")
-    if kdj_signal and "中性" not in kdj_signal:
-        logger.info(f"【KDJ信号】{kdj_signal}")
-    if kdj_div:
-        logger.info(f"【KDJ背离】{kdj_div}")
-    if vol_signal:
-        logger.info(f"【成交信号】{vol_signal}")
-    logger.info(f"【综合评分】{score_desc}")
-    logger.info(f"【操作建议】{advice}")
+    # 构建块式日志
+    lines = [
+        "=" * 60,
+        f"  标的: {label}  |  检测时间: {now_str}",
+        "-" * 60,
+        f"  {price_info}",
+        "-" * 60,
+        "  [技术指标]",
+        f"    MACD   DIF: {latest_macd['DIF']:>8.4f}   DEA: {latest_macd['DEA']:>8.4f}   HIST: {latest_macd['MACD_HIST']:>8.4f}",
+        f"    KDJ      K: {latest_kdj['K']:>8.2f}      D: {latest_kdj['D']:>8.2f}      J: {latest_kdj['J']:>8.2f}",
+        f"    成交   量比: {latest_vol['VOL_RATIO']:>8.2f}   均量: {latest_vol['VOL_MA']:>10,.0f}   现量: {latest_hist['volume']:>10,.0f}",
+        "-" * 60,
+        "  [信号检测]",
+        f"    [MACD柱体] {bar_signal if bar_signal else '(无)'}",
+        f"    [MACD背离] {div_signal if div_signal else '(无)'}",
+        f"    [KDJ信号]  {kdj_signal if (kdj_signal and '中性' not in kdj_signal) else '(无)'}",
+        f"    [KDJ背离]  {kdj_div if kdj_div else '(无)'}",
+        f"    [成交信号] {vol_signal if vol_signal else '(无)'}",
+        "-" * 60,
+        f"  [综合评分] {score_desc}",
+        f"  [评分依据] {', '.join(reasons) if reasons else '无'}",
+        "-" * 60,
+        f"  [操作建议] {advice}",
+        "=" * 60,
+    ]
+
+    _log_block(logger, lines)
 
 
 def main() -> int:
