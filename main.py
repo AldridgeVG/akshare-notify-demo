@@ -1,6 +1,6 @@
 """ETF 多指标实时监控 - 命令行入口
 
-包装 macd_monitor_518880 模块，支持通过命令行参数指定标的、轮询间隔等。
+支持单标的或多标的串行轮询，名称自动从 AKShare 接口获取。
 """
 import argparse
 import logging
@@ -15,7 +15,7 @@ from config_loader import CONFIG
 from macd_monitor_518880 import (
     MACD_FAST, MACD_SLOW, MACD_SIGNAL,
     KDJ_N, KDJ_M1, KDJ_M2, VOL_MA_DAYS,
-    fetch_history_daily, fetch_spot_price,
+    fetch_history_daily, fetch_spot_price, fetch_etf_name,
     compute_macd, compute_kdj, compute_volume_signals,
     detect_significant_bar, detect_divergence,
     detect_kdj_signals, detect_volume_signals,
@@ -25,7 +25,6 @@ from macd_monitor_518880 import (
 LOG_DIR = Path("logs")
 
 # 从 config.yml 读取默认值，命令行参数可覆盖
-_STOCK_CFG = CONFIG.get("stock", {})
 _MONITOR_CFG = CONFIG.get("monitor", {})
 
 
@@ -33,10 +32,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="ETF 多指标实时监控（MACD + KDJ + 成交量）",
     )
-    parser.add_argument("-c", "--code", default=_STOCK_CFG.get("code", "518880"),
-                        help="ETF 代码，默认 518880（华安黄金ETF）")
-    parser.add_argument("-n", "--name", default=_STOCK_CFG.get("name", ""),
-                        help="ETF 名称（仅用于日志显示）")
+    parser.add_argument("-c", "--code", default="",
+                        help="单个 ETF 代码，例如 518880")
+    parser.add_argument("-cs", "--codes", default="",
+                        help="多个 ETF 代码，逗号分隔，例如 518880,512880")
     parser.add_argument("-i", "--interval", type=int,
                         default=_MONITOR_CFG.get("poll_interval", 60),
                         help="轮询间隔（秒），默认 60")
@@ -48,10 +47,10 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def setup_logger(code: str) -> logging.Logger:
-    """配置日志：统一输出到 logs/ 目录，并覆盖默认 root logger。"""
+def setup_logger() -> logging.Logger:
+    """配置日志：统一输出到 logs/monitor.log，并覆盖默认 root logger。"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / f"monitor_{code}.log"
+    log_path = LOG_DIR / "monitor.log"
 
     root = logging.getLogger()
     # 清除已有 handlers，避免 macd_monitor_518880 模块的 basicConfig 干扰
@@ -83,8 +82,10 @@ def _log_block(logger: logging.Logger, lines: list[str]) -> None:
         logger.info(line)
 
 
-def run_check(symbol: str, name: str, history_days: int, logger: logging.Logger) -> None:
+def run_check(symbol: str, history_days: int, logger: logging.Logger) -> None:
     """执行一次完整的指标检测，并以清晰排版输出结果。"""
+    # 获取名称（首次从接口读取）
+    name = fetch_etf_name(symbol)
     hist_df = fetch_history_daily(symbol, history_days)
 
     # 实时价格
@@ -160,11 +161,19 @@ def run_check(symbol: str, name: str, history_days: int, logger: logging.Logger)
 
 def main() -> int:
     args = parse_args()
-    logger = setup_logger(args.code)
-    label = args.code + (f"({args.name})" if args.name else "")
+
+    # 解析代码列表：-cs 优先，否则回退到 -c，最后再回退到 config.yml
+    if args.codes:
+        codes = [c.strip() for c in args.codes.split(",") if c.strip()]
+    elif args.code:
+        codes = [args.code.strip()]
+    else:
+        codes = [CONFIG.get("stock", {}).get("code", "518880")]
+
+    logger = setup_logger()
 
     logger.info("=" * 60)
-    logger.info(f"ETF 多指标监控启动 | 标的: {label}")
+    logger.info(f"ETF 多指标监控启动 | 标的数: {len(codes)} | 列表: {', '.join(codes)}")
     logger.info(f"AKShare 版本: {ak.__version__}")
     logger.info(
         f"轮询间隔: {args.interval}s | 历史天数: {args.history_days} | "
@@ -173,21 +182,22 @@ def main() -> int:
     logger.info("=" * 60)
 
     if args.once:
-        try:
-            run_check(args.code, args.name, args.history_days, logger)
-        except Exception as e:
-            logger.error(f"检测失败: {e}", exc_info=True)
-            return 1
+        for code in codes:
+            try:
+                run_check(code, args.history_days, logger)
+            except Exception as e:
+                logger.error(f"[{code}] 检测失败: {e}", exc_info=True)
         return 0
 
     loop_count = 0
     while True:
         loop_count += 1
-        try:
-            logger.info(f"--- 第 {loop_count} 次检测 ---")
-            run_check(args.code, args.name, args.history_days, logger)
-        except Exception as e:
-            logger.error(f"主循环异常: {e}", exc_info=True)
+        logger.info(f"--- 第 {loop_count} 轮检测 ---")
+        for code in codes:
+            try:
+                run_check(code, args.history_days, logger)
+            except Exception as e:
+                logger.error(f"[{code}] 检测异常: {e}", exc_info=True)
         time.sleep(args.interval)
 
 

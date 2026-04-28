@@ -3,7 +3,6 @@
 # 监控标的
 stock:
   code: "518880"      # ETF 代码（上交所华安黄金ETF）
-  name: "黄金ETF"      # 日志展示名称
 
 # 监控行为
 monitor:

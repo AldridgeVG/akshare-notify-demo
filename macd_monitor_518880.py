@@ -5,14 +5,13 @@ from datetime import datetime, timedelta
 from typing import Optional, Tuple, List
 
 import akshare as ak
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 from config_loader import CONFIG, STRATEGY
 
 # ===================== 配置 =====================
 STOCK_CODE = CONFIG.get("stock", {}).get("code", "518880")
-STOCK_NAME = CONFIG.get("stock", {}).get("name", "黄金ETF")
 POLL_INTERVAL = CONFIG.get("monitor", {}).get("poll_interval", 60)
 HISTORY_DAYS = CONFIG.get("monitor", {}).get("history_days", 120)
 
@@ -47,16 +46,7 @@ SCORE_BUY = STRATEGY.get("score", {}).get("buy", 2)
 SCORE_SELL = STRATEGY.get("score", {}).get("sell", -2)
 SCORE_STRONG_SELL = STRATEGY.get("score", {}).get("strong_sell", -3)
 
-# 日志配置
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-    handlers=[
-        logging.FileHandler(f"macd_monitor_{STOCK_CODE}.log", encoding="utf-8"),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+# 日志由调用方统一配置，本模块只获取 logger 实例
 logger = logging.getLogger("MACD_Monitor")
 
 
@@ -94,19 +84,19 @@ def compute_kdj(df: pd.DataFrame, n: int = 9, m1: int = 3, m2: int = 3) -> pd.Da
     """
     low_min = df["low"].rolling(window=n, min_periods=n).min()
     high_max = df["high"].rolling(window=n, min_periods=n).max()
-    
+
     # RSV（未成熟随机值）
     rsv = (df["close"] - low_min) / (high_max - low_min) * 100
-    
+
     # K 值: 当日K = 2/3 * 前一日K + 1/3 * 当日RSV
-    k = rsv.ewm(alpha=1/m1, adjust=False).mean()
-    
+    k = rsv.ewm(alpha=1 / m1, adjust=False).mean()
+
     # D 值: 当日D = 2/3 * 前一日D + 1/3 * 当日K
-    d = k.ewm(alpha=1/m2, adjust=False).mean()
-    
+    d = k.ewm(alpha=1 / m2, adjust=False).mean()
+
     # J 值: J = 3K - 2D
     j = 3 * k - 2 * d
-    
+
     return pd.DataFrame({
         "K": k,
         "D": d,
@@ -125,7 +115,7 @@ def compute_volume_signals(df: pd.DataFrame, ma_days: int = VOL_MA_DAYS) -> pd.D
     """
     vol_ma = df["volume"].rolling(window=ma_days, min_periods=ma_days).mean()
     vol_ratio = df["volume"] / vol_ma
-    
+
     return pd.DataFrame({
         "VOL_MA": vol_ma,
         "VOL_RATIO": vol_ratio
@@ -139,7 +129,7 @@ def fetch_history_daily(symbol: str = STOCK_CODE, days: int = HISTORY_DAYS) -> p
     使用 ak.fund_etf_hist_em（东财ETF数据源）。
     """
     logger.info(f"正在获取 {symbol} 历史日K线数据...")
-    
+
     try:
         end_date = datetime.now().strftime("%Y%m%d")
         start_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
@@ -154,7 +144,7 @@ def fetch_history_daily(symbol: str = STOCK_CODE, days: int = HISTORY_DAYS) -> p
         logger.warning(f"fund_etf_hist_em 带日期参数失败: {e}，尝试获取全部历史...")
         df = ak.fund_etf_hist_em(symbol=symbol, period="daily", adjust="qfq")
         df = df.tail(days).copy()
-    
+
     df = df.rename(columns={
         "日期": "date",
         "收盘": "close",
@@ -166,11 +156,11 @@ def fetch_history_daily(symbol: str = STOCK_CODE, days: int = HISTORY_DAYS) -> p
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values("date").reset_index(drop=True)
     df = df.set_index("date")
-    
+
     # 确保数值类型
     for col in ["open", "high", "low", "close", "volume"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
-    
+
     logger.info(f"历史数据获取完成，共 {len(df)} 条记录，最新收盘: {df['close'].iloc[-1]:.3f}")
     return df
 
@@ -186,17 +176,17 @@ def fetch_spot_price(symbol: str = STOCK_CODE) -> Optional[Tuple[float, str, str
         if row.empty:
             logger.warning(f"未在 fund_etf_spot_em 中查到 {symbol}")
             return None
-        
+
         latest_price = float(row["最新价"].iloc[0])
-        
+
         date_raw = row["数据日期"].iloc[0] if "数据日期" in row.columns else ""
         time_raw = row["更新时间"].iloc[0] if "更新时间" in row.columns else ""
-        
+
         try:
             date_str = pd.to_datetime(date_raw).strftime("%Y-%m-%d") if date_raw else ""
         except Exception:
             date_str = str(date_raw)[:10]
-        
+
         try:
             time_str = pd.to_datetime(time_raw).strftime("%H:%M:%S") if time_raw else ""
         except Exception:
@@ -205,25 +195,41 @@ def fetch_spot_price(symbol: str = STOCK_CODE) -> Optional[Tuple[float, str, str
                 time_str = time_s.split(" ")[-1][:8]
             else:
                 time_str = time_s[:8]
-        
+
         return latest_price, date_str, time_str
     except Exception as e:
         logger.error(f"获取实时行情失败: {e}")
         return None
 
 
+def fetch_etf_name(symbol: str = STOCK_CODE) -> str:
+    """
+    从 fund_etf_spot_em 接口获取 ETF 名称。
+    返回: ETF 名称 或空字符串
+    """
+    try:
+        df = ak.fund_etf_spot_em()
+        row = df[df["代码"] == symbol]
+        if not row.empty:
+            return str(row["名称"].iloc[0])
+    except Exception as e:
+        logger.warning(f"获取 ETF 名称失败: {e}")
+    return ""
+
+
 # ===================== MACD 信号检测 =====================
-def detect_significant_bar(macd_df: pd.DataFrame, lookback: int = BAR_RECENT_N, ratio: float = BAR_SIGNIFICANT_RATIO) -> str:
+def detect_significant_bar(macd_df: pd.DataFrame, lookback: int = BAR_RECENT_N,
+                           ratio: float = BAR_SIGNIFICANT_RATIO) -> str:
     """
     检测"显著红绿柱"。
     """
     hist = macd_df["MACD_HIST"]
     if len(hist) < lookback + 2:
         return ""
-    
+
     curr = hist.iloc[-1]
     prev = hist.iloc[-2]
-    
+
     same_color_bars = []
     for i in range(2, lookback + 2):
         val = hist.iloc[-i]
@@ -231,10 +237,10 @@ def detect_significant_bar(macd_df: pd.DataFrame, lookback: int = BAR_RECENT_N, 
             same_color_bars.append(val)
         elif curr < 0 and val < 0:
             same_color_bars.append(abs(val))
-    
+
     if not same_color_bars:
         return ""
-    
+
     if curr > 0:
         avg_bar = np.mean(same_color_bars)
         max_bar = max(same_color_bars)
@@ -246,7 +252,7 @@ def detect_significant_bar(macd_df: pd.DataFrame, lookback: int = BAR_RECENT_N, 
         max_bar = max(same_color_bars)
         if curr_abs >= max_bar or (prev < 0 and curr_abs >= abs(prev) * ratio) or curr_abs >= avg_bar * ratio:
             return f"显著绿柱(柱高={curr:.4f}, 近期均值=-{avg_bar:.4f})"
-    
+
     return ""
 
 
@@ -272,34 +278,34 @@ def detect_divergence(macd_df: pd.DataFrame, lookback: int = DEV_LOOKBACK) -> st
     """
     if len(macd_df) < lookback:
         lookback = len(macd_df) - 5
-    
+
     sub_df = macd_df.iloc[-lookback:].copy()
     close = sub_df["close"]
     hist = sub_df["MACD_HIST"]
     dif = sub_df["DIF"]
-    
+
     peaks, troughs = find_peaks_and_troughs(close, min_distance=PEAK_MIN_DISTANCE)
-    
+
     signal = ""
-    
+
     if len(peaks) >= 2:
         p1, p2 = peaks[-2], peaks[-1]
         price1, price2 = close.iloc[p1], close.iloc[p2]
         hist1, hist2 = hist.iloc[p1], hist.iloc[p2]
         dif1, dif2 = dif.iloc[p1], dif.iloc[p2]
-        
+
         if price2 > price1 and (hist2 < hist1 or dif2 < dif1):
             signal = f"MACD顶背离(价:{price1:.3f}->{price2:.3f}, HIST:{hist1:.4f}->{hist2:.4f})【建议减仓/观望】"
-    
+
     if not signal and len(troughs) >= 2:
         t1, t2 = troughs[-2], troughs[-1]
         price1, price2 = close.iloc[t1], close.iloc[t2]
         hist1, hist2 = hist.iloc[t1], hist.iloc[t2]
         dif1, dif2 = dif.iloc[t1], dif.iloc[t2]
-        
+
         if price2 < price1 and (hist2 > hist1 or dif2 > dif1):
             signal = f"MACD底背离(价:{price1:.3f}->{price2:.3f}, HIST:{hist1:.4f}->{hist2:.4f})【建议买进/加仓】"
-    
+
     return signal
 
 
@@ -314,14 +320,14 @@ def detect_kdj_signals(kdj_df: pd.DataFrame, price_df: pd.DataFrame) -> Tuple[st
     """
     if len(kdj_df) < 2:
         return "", ""
-    
+
     latest = kdj_df.iloc[-1]
     prev = kdj_df.iloc[-2]
     k, d, j = latest["K"], latest["D"], latest["J"]
     prev_k, prev_d = prev["K"], prev["D"]
-    
+
     signals = []
-    
+
     # 金叉/死叉
     if prev_k < prev_d and k > d:
         if k < 30:
@@ -333,7 +339,7 @@ def detect_kdj_signals(kdj_df: pd.DataFrame, price_df: pd.DataFrame) -> Tuple[st
             signals.append(f"KDJ高位死叉(K={k:.2f}, D={d:.2f}, J={j:.2f})【强卖出信号】")
         else:
             signals.append(f"KDJ死叉(K={k:.2f}, D={d:.2f}, J={j:.2f})")
-    
+
     # 超买/超卖
     if j > 100:
         signals.append(f"KDJ超买区(J={j:.2f})")
@@ -343,12 +349,12 @@ def detect_kdj_signals(kdj_df: pd.DataFrame, price_df: pd.DataFrame) -> Tuple[st
         signals.append(f"KDJ高位运行(K={k:.2f}, D={d:.2f})")
     elif k < 20 and d < 20:
         signals.append(f"KDJ低位运行(K={k:.2f}, D={d:.2f})")
-    
+
     kdj_signal = "; ".join(signals) if signals else f"KDJ中性(K={k:.2f}, D={d:.2f}, J={j:.2f})"
-    
+
     # KDJ背离检测（使用K值或D值与价格比较）
     kdj_div = detect_kdj_divergence(price_df, kdj_df)
-    
+
     return kdj_signal, kdj_div
 
 
@@ -358,26 +364,26 @@ def detect_kdj_divergence(price_df: pd.DataFrame, kdj_df: pd.DataFrame, lookback
     """
     if len(price_df) < lookback or len(kdj_df) < lookback:
         lookback = min(len(price_df), len(kdj_df)) - 5
-    
+
     close = price_df["close"].iloc[-lookback:]
     k_values = kdj_df["K"].iloc[-lookback:]
-    
+
     peaks, troughs = find_peaks_and_troughs(close, min_distance=PEAK_MIN_DISTANCE)
-    
+
     if len(peaks) >= 2:
         p1, p2 = peaks[-2], peaks[-1]
         price1, price2 = close.iloc[p1], close.iloc[p2]
         k1, k2 = k_values.iloc[p1], k_values.iloc[p2]
         if price2 > price1 and k2 < k1:
             return f"KDJ顶背离(价:{price1:.3f}->{price2:.3f}, K:{k1:.2f}->{k2:.2f})【减仓警示】"
-    
+
     if len(troughs) >= 2:
         t1, t2 = troughs[-2], troughs[-1]
         price1, price2 = close.iloc[t1], close.iloc[t2]
         k1, k2 = k_values.iloc[t1], k_values.iloc[t2]
         if price2 < price1 and k2 > k1:
             return f"KDJ底背离(价:{price1:.3f}->{price2:.3f}, K:{k1:.2f}->{k2:.2f})【买入机会】"
-    
+
     return ""
 
 
@@ -390,19 +396,19 @@ def detect_volume_signals(df: pd.DataFrame, vol_info: pd.DataFrame) -> str:
     """
     if len(df) < 2 or len(vol_info) < 1:
         return ""
-    
+
     latest = df.iloc[-1]
     prev = df.iloc[-2]
-    
+
     curr_price = latest["close"]
     prev_price = prev["close"]
     curr_vol = latest["volume"]
     vol_ratio = vol_info["VOL_RATIO"].iloc[-1] if not pd.isna(vol_info["VOL_RATIO"].iloc[-1]) else 1.0
-    
+
     price_change = (curr_price - prev_price) / prev_price * 100 if prev_price != 0 else 0
-    
+
     signals = []
-    
+
     # 放量判断
     if vol_ratio > VOL_RATIO_THRESHOLD:
         if price_change > 1.0:
@@ -420,19 +426,19 @@ def detect_volume_signals(df: pd.DataFrame, vol_info: pd.DataFrame) -> str:
             signals.append(f"缩量下跌(量比{vol_ratio:.2f})【抛压减轻/可能止跌】")
     else:
         signals.append(f"成交量正常(量比{vol_ratio:.2f})")
-    
+
     return "; ".join(signals)
 
 
 # ===================== 综合评分与建议 =====================
 def calculate_comprehensive_score(
-    macd_df: pd.DataFrame,
-    bar_signal: str,
-    div_signal: str,
-    kdj_df: pd.DataFrame,
-    kdj_signal: str,
-    kdj_div: str,
-    vol_signal: str
+        macd_df: pd.DataFrame,
+        bar_signal: str,
+        div_signal: str,
+        kdj_df: pd.DataFrame,
+        kdj_signal: str,
+        kdj_div: str,
+        vol_signal: str
 ) -> Tuple[int, str]:
     """
     多指标综合评分系统。
@@ -456,12 +462,12 @@ def calculate_comprehensive_score(
     """
     score = 0
     reasons = []
-    
+
     # --- MACD 评分 ---
     if len(macd_df) >= 2:
         latest = macd_df.iloc[-1]
         prev = macd_df.iloc[-2]
-        
+
         # 金叉/死叉
         if prev["DIF"] < prev["DEA"] and latest["DIF"] > latest["DEA"]:
             score += 1
@@ -469,7 +475,7 @@ def calculate_comprehensive_score(
         elif prev["DIF"] > prev["DEA"] and latest["DIF"] < latest["DEA"]:
             score -= 1
             reasons.append("MACD死叉(-1)")
-        
+
         # 显著柱体
         if "显著红柱" in bar_signal:
             score += 1
@@ -477,7 +483,7 @@ def calculate_comprehensive_score(
         elif "显著绿柱" in bar_signal:
             score -= 1
             reasons.append("MACD显著绿柱(-1)")
-        
+
         # 背离
         if "底背离" in div_signal:
             score += 1
@@ -485,14 +491,14 @@ def calculate_comprehensive_score(
         elif "顶背离" in div_signal:
             score -= 1
             reasons.append("MACD顶背离(-1)")
-    
+
     # --- KDJ 评分 ---
     if len(kdj_df) >= 2:
         latest_kdj = kdj_df.iloc[-1]
         prev_kdj = kdj_df.iloc[-2]
         k, d, j = latest_kdj["K"], latest_kdj["D"], latest_kdj["J"]
         prev_k = prev_kdj["K"]
-        
+
         # 金叉/死叉
         if prev_k < prev_kdj["D"] and k > d:
             if k < 30:
@@ -508,7 +514,7 @@ def calculate_comprehensive_score(
             else:
                 score -= 1
                 reasons.append("KDJ死叉(-1)")
-        
+
         # 超买超卖
         if j > 100:
             score -= 1
@@ -516,7 +522,7 @@ def calculate_comprehensive_score(
         elif j < 0:
             score += 1
             reasons.append("KDJ超卖(J<0)(+1)")
-        
+
         # 背离
         if "底背离" in kdj_div:
             score += 1
@@ -524,7 +530,7 @@ def calculate_comprehensive_score(
         elif "顶背离" in kdj_div:
             score -= 1
             reasons.append("KDJ顶背离(-1)")
-    
+
     # --- 成交量评分 ---
     if "放量上涨" in vol_signal:
         score += 1
@@ -538,7 +544,7 @@ def calculate_comprehensive_score(
     elif "缩量下跌" in vol_signal:
         score += 1
         reasons.append("缩量下跌/抛压减轻(+1)")
-    
+
     # 评分描述
     if score >= SCORE_STRONG_BUY:
         score_desc = f"强烈看多(评分:{score})"
@@ -550,7 +556,7 @@ def calculate_comprehensive_score(
         score_desc = f"偏空/卖出(评分:{score})"
     else:
         score_desc = f"中性观望(评分:{score})"
-    
+
     return score, score_desc, reasons
 
 
@@ -559,7 +565,7 @@ def generate_comprehensive_advice(score: int, score_desc: str, reasons: List[str
     根据综合评分生成最终操作建议。
     """
     advice = f"【{score_desc}】"
-    
+
     if score >= SCORE_STRONG_BUY:
         advice += " 多指标共振，买入信号强烈，建议积极建仓/加仓。"
     elif score >= SCORE_BUY:
@@ -570,53 +576,54 @@ def generate_comprehensive_advice(score: int, score_desc: str, reasons: List[str
         advice += " 空头信号占优，建议减仓避险或空仓观望。"
     else:
         advice += " 多空信号交织，方向不明，建议观望等待明确信号。"
-    
+
     if reasons:
         advice += f" 依据: {', '.join(reasons)}"
-    
+
     return advice
 
 
 # ===================== 主监控循环 =====================
 def main():
+    _etf_name = fetch_etf_name(STOCK_CODE)
     logger.info("=" * 60)
-    logger.info(f"多指标综合监控系统启动 | 标的: {STOCK_CODE}({STOCK_NAME})")
+    logger.info(f"多指标综合监控系统启动 | 标的: {STOCK_CODE}({_etf_name})")
     logger.info(f"AKShare 版本: {ak.__version__}")
     logger.info("指标: MACD + KDJ + 成交量")
     logger.info("=" * 60)
-    
+
     # 1. 初始化历史数据
     try:
         hist_df = fetch_history_daily(STOCK_CODE, HISTORY_DAYS)
-        
+
         # 计算 MACD
         macd_df = compute_macd(hist_df["close"], MACD_FAST, MACD_SLOW, MACD_SIGNAL)
-        
+
         # 计算 KDJ
         kdj_df = compute_kdj(hist_df, KDJ_N, KDJ_M1, KDJ_M2)
-        
+
         # 计算成交量信号
         vol_info = compute_volume_signals(hist_df, VOL_MA_DAYS)
-        
+
         # 合并所有指标
         hist_df = hist_df.join(macd_df[["DIF", "DEA", "MACD_HIST"]])
         hist_df = hist_df.join(kdj_df[["K", "D", "J"]])
         hist_df = hist_df.join(vol_info[["VOL_MA", "VOL_RATIO"]])
-        
+
     except Exception as e:
         logger.error(f"初始化历史数据失败: {e}")
         sys.exit(1)
-    
+
     logger.info(f"初始化完成，已加载 {len(hist_df)} 根日K线，所有指标计算就绪。")
-    
+
     # 2. 主循环
     last_date = hist_df.index[-1].date()
     loop_count = 0
-    
+
     while True:
         loop_count += 1
         now = datetime.now()
-        
+
         try:
             # 获取实时价格
             spot = fetch_spot_price(STOCK_CODE)
@@ -624,10 +631,10 @@ def main():
                 logger.warning("本次轮询未获取到实时价格，跳过...")
                 time.sleep(POLL_INTERVAL)
                 continue
-            
+
             latest_price, data_date_str, data_time_str = spot
             logger.info(f"[{loop_count}] 实时价格: {latest_price:.3f} | 数据时间: {data_date_str} {data_time_str}")
-            
+
             # 判断是否需要更新历史数据（跨日时）
             today = now.date()
             if today > last_date:
@@ -637,36 +644,36 @@ def main():
                     new_macd_df = compute_macd(new_hist_df["close"], MACD_FAST, MACD_SLOW, MACD_SIGNAL)
                     new_kdj_df = compute_kdj(new_hist_df, KDJ_N, KDJ_M1, KDJ_M2)
                     new_vol_info = compute_volume_signals(new_hist_df, VOL_MA_DAYS)
-                    
+
                     hist_df = new_hist_df.join(new_macd_df[["DIF", "DEA", "MACD_HIST"]])
                     hist_df = hist_df.join(new_kdj_df[["K", "D", "J"]])
                     hist_df = hist_df.join(new_vol_info[["VOL_MA", "VOL_RATIO"]])
-                    
+
                     last_date = today
                     logger.info("历史数据已刷新")
                 except Exception as e:
                     logger.warning(f"刷新历史数据失败，继续使用旧数据: {e}")
-            
+
             # --- 更新今日数据（用实时价格替代当日收盘价进行近似估算） ---
             updated_hist = hist_df.copy()
             updated_hist.loc[updated_hist.index[-1], "close"] = latest_price
-            
+
             # 重新计算所有指标
             updated_macd = compute_macd(updated_hist["close"], MACD_FAST, MACD_SLOW, MACD_SIGNAL)
             updated_kdj = compute_kdj(updated_hist, KDJ_N, KDJ_M1, KDJ_M2)
             updated_vol = compute_volume_signals(updated_hist, VOL_MA_DAYS)
-            
+
             # --- 检测各指标信号 ---
             # MACD
             bar_signal = detect_significant_bar(updated_macd)
             div_signal = detect_divergence(updated_macd)
-            
+
             # KDJ
             kdj_signal, kdj_div = detect_kdj_signals(updated_kdj, updated_hist)
-            
+
             # 成交量
             vol_signal = detect_volume_signals(updated_hist, updated_vol)
-            
+
             # 综合评分
             score, score_desc, reasons = calculate_comprehensive_score(
                 updated_macd, bar_signal, div_signal,
@@ -674,12 +681,12 @@ def main():
                 vol_signal
             )
             advice = generate_comprehensive_advice(score, score_desc, reasons)
-            
+
             # --- 获取最新指标值 ---
             latest_macd = updated_macd.iloc[-1]
             latest_kdj = updated_kdj.iloc[-1]
             latest_vol = updated_vol.iloc[-1]
-            
+
             # --- 打印综合日志 ---
             logger.info(
                 f"MACD | DIF={latest_macd['DIF']:.4f} DEA={latest_macd['DEA']:.4f} "
@@ -692,7 +699,7 @@ def main():
                 f"VOL  | 量比={latest_vol['VOL_RATIO']:.2f} 均量={latest_vol['VOL_MA']:,.0f} "
                 f"现量={updated_hist['volume'].iloc[-1]:,.0f}"
             )
-            
+
             if bar_signal:
                 logger.info(f"【MACD柱体】{bar_signal}")
             if div_signal:
@@ -703,14 +710,14 @@ def main():
                 logger.info(f"【KDJ背离】{kdj_div}")
             if vol_signal:
                 logger.info(f"【成交信号】{vol_signal}")
-            
+
             logger.info(f"【综合评分】{score_desc}")
             logger.info(f"【操作建议】{advice}")
             logger.info("-" * 50)
-            
+
         except Exception as e:
             logger.error(f"主循环异常: {e}", exc_info=True)
-        
+
         # 等待下一轮
         time.sleep(POLL_INTERVAL)
 

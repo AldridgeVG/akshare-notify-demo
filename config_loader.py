@@ -17,7 +17,7 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(
             f"配置文件不存在: {path}\n"
-            f"请确保 {path.name} 位于项目根目录。"
+            f"请确保 {path.name} 位于 {path.parent} 目录。"
         )
     with path.open("r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
