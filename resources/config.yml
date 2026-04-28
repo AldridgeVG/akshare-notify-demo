@@ -6,8 +6,9 @@ stock:
 
 # 监控行为
 monitor:
-  poll_interval: 60   # 轮询间隔（秒）
-  history_days: 120   # 历史日K线获取天数
+  poll_interval: 60   # 轮询间隔（秒），未指定时根据 period 自动选择
+  history_days: 120   # 历史日K线获取天数（分钟级会自动缩小）
+  period: "daily"     # 数据周期: daily | 1min | 5min | 15min | 30min | 60min
 
 # 技术指标参数
 indicators:

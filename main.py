@@ -12,10 +12,10 @@ from pathlib import Path
 import akshare as ak
 
 from config_loader import CONFIG
-from macd_monitor_518880 import (
+from macd_monitor import (
     MACD_FAST, MACD_SLOW, MACD_SIGNAL,
     KDJ_N, KDJ_M1, KDJ_M2, VOL_MA_DAYS,
-    fetch_history_daily, fetch_spot_price, fetch_etf_name,
+    fetch_history, fetch_spot_price, fetch_etf_name,
     compute_macd, compute_kdj, compute_volume_signals,
     detect_significant_bar, detect_divergence,
     detect_kdj_signals, detect_volume_signals,
@@ -28,6 +28,19 @@ LOG_DIR = Path("logs")
 _MONITOR_CFG = CONFIG.get("monitor", {})
 
 
+def _default_interval() -> int:
+    """根据配置的 period 自动选择默认轮询间隔。"""
+    period = _MONITOR_CFG.get("period", "daily")
+    return {
+        "daily": 60,
+        "1min": 30,
+        "5min": 120,
+        "15min": 300,
+        "30min": 600,
+        "60min": 1200,
+    }.get(period, 60)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="ETF 多指标实时监控（MACD + KDJ + 成交量）",
@@ -37,8 +50,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-cs", "--codes", default="",
                         help="多个 ETF 代码，逗号分隔，例如 518880,512880")
     parser.add_argument("-i", "--interval", type=int,
-                        default=_MONITOR_CFG.get("poll_interval", 60),
-                        help="轮询间隔（秒），默认 60")
+                        default=_MONITOR_CFG.get("poll_interval") or _default_interval(),
+                        help="轮询间隔（秒），默认根据周期自动选择")
     parser.add_argument("-d", "--history-days", type=int,
                         default=_MONITOR_CFG.get("history_days", 120),
                         help="历史 K 线获取天数，默认 120")
@@ -86,7 +99,7 @@ def run_check(symbol: str, history_days: int, logger: logging.Logger) -> None:
     """执行一次完整的指标检测，并以清晰排版输出结果。"""
     # 获取名称（首次从接口读取）
     name = fetch_etf_name(symbol)
-    hist_df = fetch_history_daily(symbol, history_days)
+    hist_df = fetch_history(symbol, history_days)
 
     # 实时价格
     spot = fetch_spot_price(symbol)
@@ -130,6 +143,23 @@ def run_check(symbol: str, history_days: int, logger: logging.Logger) -> None:
     label = f"{symbol}({name})" if name else symbol
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # 收集强烈信号
+    strong_signals = []
+    if bar_signal and "显著" in bar_signal:
+        strong_signals.append(f"[MACD柱体] {bar_signal}")
+    if div_signal:
+        strong_signals.append(f"[MACD背离] {div_signal}")
+    if kdj_signal and ("强买入" in kdj_signal or "强卖出" in kdj_signal):
+        strong_signals.append(f"[KDJ信号]  {kdj_signal}")
+    if kdj_div:
+        strong_signals.append(f"[KDJ背离]  {kdj_div}")
+    if vol_signal and ("放量上涨" in vol_signal or "放量下跌" in vol_signal):
+        strong_signals.append(f"[成交信号] {vol_signal}")
+    if score >= 3:
+        strong_signals.append(f"[综合评分] {score_desc}")
+    elif score <= -3:
+        strong_signals.append(f"[综合评分] {score_desc}")
+
     # 构建块式日志
     lines = [
         "=" * 60,
@@ -142,6 +172,15 @@ def run_check(symbol: str, history_days: int, logger: logging.Logger) -> None:
         f"    KDJ      K: {latest_kdj['K']:>8.2f}      D: {latest_kdj['D']:>8.2f}      J: {latest_kdj['J']:>8.2f}",
         f"    成交   量比: {latest_vol['VOL_RATIO']:>8.2f}   均量: {latest_vol['VOL_MA']:>10,.0f}   现量: {latest_hist['volume']:>10,.0f}",
         "-" * 60,
+    ]
+
+    if strong_signals:
+        lines.append("  ⚠ 强烈信号")
+        for sig in strong_signals:
+            lines.append(f"    >>> {sig}")
+        lines.append("-" * 60)
+
+    lines.extend([
         "  [信号检测]",
         f"    [MACD柱体] {bar_signal if bar_signal else '(无)'}",
         f"    [MACD背离] {div_signal if div_signal else '(无)'}",
@@ -154,7 +193,7 @@ def run_check(symbol: str, history_days: int, logger: logging.Logger) -> None:
         "-" * 60,
         f"  [操作建议] {advice}",
         "=" * 60,
-    ]
+    ])
 
     _log_block(logger, lines)
 

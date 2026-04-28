@@ -165,6 +165,68 @@ def fetch_history_daily(symbol: str = STOCK_CODE, days: int = HISTORY_DAYS) -> p
     return df
 
 
+def _get_exchange_prefix(code: str) -> str:
+    """根据 ETF 代码判断交易所前缀：sh(上海) / sz(深圳)。"""
+    if code.startswith(("51", "58")):
+        return "sh"
+    elif code.startswith(("15", "16", "18")):
+        return "sz"
+    return "sh"
+
+
+def fetch_history_minute(symbol: str, period: str) -> pd.DataFrame:
+    """
+    获取 ETF 分钟级 K 线数据（东财数据源）。
+    period: 1min, 5min, 15min, 30min, 60min
+    """
+    logger.info(f"正在获取 {symbol} {period} 分钟K线数据...")
+
+    prefix = _get_exchange_prefix(symbol)
+    full_symbol = f"{prefix}{symbol}"
+    min_period = period.replace("min", "")  # "1min" -> "1"
+
+    # 分钟级数据历史有限，按周期取最近足够天数
+    days_map = {"1min": 5, "5min": 20, "15min": 60, "30min": 120, "60min": 240}
+    fetch_days = days_map.get(period, 5)
+
+    end_date = datetime.now().strftime("%Y%m%d")
+    start_date = (datetime.now() - timedelta(days=fetch_days)).strftime("%Y%m%d")
+
+    df = ak.fund_etf_hist_min_em(
+        symbol=full_symbol,
+        period=min_period,
+        start_date=start_date,
+        end_date=end_date,
+        adjust="qfq"
+    )
+
+    df = df.rename(columns={
+        "时间": "date",
+        "开盘": "open",
+        "收盘": "close",
+        "最高": "high",
+        "最低": "low",
+        "成交量": "volume"
+    })
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.sort_values("date").reset_index(drop=True)
+    df = df.set_index("date")
+
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    logger.info(f"{period} 数据获取完成，共 {len(df)} 条记录，最新收盘: {df['close'].iloc[-1]:.3f}")
+    return df
+
+
+def fetch_history(symbol: str = STOCK_CODE, days: int = HISTORY_DAYS) -> pd.DataFrame:
+    """统一历史数据入口，根据 config 中的 period 自动选择日线或分钟线。"""
+    period = CONFIG.get("monitor", {}).get("period", "daily")
+    if period == "daily":
+        return fetch_history_daily(symbol, days)
+    return fetch_history_minute(symbol, period)
+
+
 def fetch_spot_price(symbol: str = STOCK_CODE) -> Optional[Tuple[float, str, str]]:
     """
     获取ETF实时行情快照。

@@ -56,7 +56,7 @@ python main.py --once
 ```
 akshare-notify-demo/
 ├── main.py                    # 命令行入口
-├── macd_monitor_518880.py     # 指标计算与信号检测核心模块
+├── macd_monito.py     # 指标计算与信号检测核心模块
 └── README.md
 ```
 
