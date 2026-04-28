@@ -6,6 +6,7 @@ import argparse
 import logging
 import sys
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from config_loader import CONFIG
 from macd_monitor import (
     MACD_FAST, MACD_SLOW, MACD_SIGNAL,
     KDJ_N, KDJ_M1, KDJ_M2, VOL_MA_DAYS,
+    SCORE_STRONG_BUY, SCORE_BUY, SCORE_SELL, SCORE_STRONG_SELL,
     fetch_history, fetch_spot_price, fetch_etf_name,
     compute_macd, compute_kdj, compute_volume_signals,
     detect_significant_bar, detect_divergence,
@@ -26,6 +28,50 @@ LOG_DIR = Path("logs")
 
 # 从 config.yml 读取默认值，命令行参数可覆盖
 _MONITOR_CFG = CONFIG.get("monitor", {})
+
+# 信号确认/防抖状态（code -> deque of recent score levels）
+_SCORE_HISTORY: dict[str, deque[str]] = {}
+# 已确认的评分级别（code -> level）
+_CONFIRMED_LEVEL: dict[str, str] = {}
+
+
+def _score_level(score: int) -> str:
+    """将评分映射为离散级别，用于防抖确认。"""
+    if score >= SCORE_STRONG_BUY:
+        return "strong_buy"
+    elif score >= SCORE_BUY:
+        return "buy"
+    elif score <= SCORE_STRONG_SELL:
+        return "strong_sell"
+    elif score <= SCORE_SELL:
+        return "sell"
+    else:
+        return "neutral"
+
+
+def _apply_signal_confirmation(code: str, score: int, score_desc: str, advice: str) -> tuple[str, str]:
+    """
+    信号确认防抖：评分级别需连续 2 次一致才确认切换。
+    未确认时，在描述与建议中追加待确认标识。
+    """
+    level = _score_level(score)
+    history = _SCORE_HISTORY.setdefault(code, deque(maxlen=2))
+    history.append(level)
+
+    confirmed_level = _CONFIRMED_LEVEL.get(code, level)
+
+    # 连续 2 次同一级别则更新确认状态
+    if len(history) == 2 and history[0] == history[1]:
+        confirmed_level = level
+        _CONFIRMED_LEVEL[code] = confirmed_level
+
+    if level == confirmed_level:
+        return score_desc, advice
+
+    # 级别切换尚未确认
+    pending_desc = score_desc + " (待确认)"
+    pending_advice = advice + " [信号切换中，建议观望]"
+    return pending_desc, pending_advice
 
 
 def _default_interval() -> int:
@@ -101,6 +147,10 @@ def run_check(symbol: str, history_days: int, logger: logging.Logger) -> None:
     name = fetch_etf_name(symbol)
     hist_df = fetch_history(symbol, history_days)
 
+    if hist_df is None or hist_df.empty:
+        logger.warning(f"[{symbol}] 未能获取历史数据，跳过本次检测")
+        return
+
     # 实时价格
     spot = fetch_spot_price(symbol)
     if spot is not None:
@@ -130,9 +180,12 @@ def run_check(symbol: str, history_days: int, logger: logging.Logger) -> None:
     score, score_desc, reasons = calculate_comprehensive_score(
         macd_df, bar_signal, div_signal,
         kdj_df, kdj_signal, kdj_div,
-        vol_signal,
+        vol_signal, hist_df,
     )
     advice = generate_comprehensive_advice(score, score_desc, reasons)
+
+    # 信号确认防抖（B2）
+    score_desc, advice = _apply_signal_confirmation(symbol, score, score_desc, advice)
 
     # 最新值
     latest_macd = macd_df.iloc[-1]
@@ -155,9 +208,9 @@ def run_check(symbol: str, history_days: int, logger: logging.Logger) -> None:
         strong_signals.append(f"[KDJ背离]  {kdj_div}")
     if vol_signal and ("放量上涨" in vol_signal or "放量下跌" in vol_signal):
         strong_signals.append(f"[成交信号] {vol_signal}")
-    if score >= 3:
+    if score >= SCORE_STRONG_BUY:
         strong_signals.append(f"[综合评分] {score_desc}")
-    elif score <= -3:
+    elif score <= SCORE_STRONG_SELL:
         strong_signals.append(f"[综合评分] {score_desc}")
 
     # 构建块式日志
