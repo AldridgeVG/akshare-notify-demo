@@ -26,7 +26,6 @@ from macd_monitor import (
 
 LOG_DIR = Path("logs")
 
-# 从 config.yml 读取默认值，命令行参数可覆盖
 _MONITOR_CFG = CONFIG.get("monitor", {})
 
 # 信号确认/防抖状态（code -> deque of recent score levels）
@@ -68,23 +67,21 @@ def _apply_signal_confirmation(code: str, score: int, score_desc: str, advice: s
     if level == confirmed_level:
         return score_desc, advice
 
-    # 级别切换尚未确认
     pending_desc = score_desc + " (待确认)"
     pending_advice = advice + " [信号切换中，建议观望]"
     return pending_desc, pending_advice
 
 
 def _default_interval() -> int:
-    """根据配置的 period 自动选择默认轮询间隔。"""
     period = _MONITOR_CFG.get("period", "daily")
     return {
-        "daily": 60,
+        "daily": 300,  # 日线数据 5 分钟轮询足够
         "1min": 30,
         "5min": 120,
         "15min": 300,
         "30min": 600,
         "60min": 1200,
-    }.get(period, 60)
+    }.get(period, 300)
 
 
 def parse_args() -> argparse.Namespace:
@@ -107,12 +104,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def setup_logger() -> logging.Logger:
-    """配置日志：统一输出到 logs/monitor.log，并覆盖默认 root logger。"""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / "monitor.log"
 
     root = logging.getLogger()
-    # 清除已有 handlers，避免 macd_monitor_518880 模块的 basicConfig 干扰
     for handler in root.handlers[:]:
         root.removeHandler(handler)
         handler.close()
@@ -136,7 +131,6 @@ def setup_logger() -> logging.Logger:
 
 
 def _log_block(logger: logging.Logger, lines: list[str]) -> None:
-    """逐行记录，确保每行都有时间戳前缀。"""
     for line in lines:
         logger.info(line)
 
@@ -149,6 +143,12 @@ def run_check(symbol: str, history_days: int, logger: logging.Logger) -> None:
 
     if hist_df is None or hist_df.empty:
         logger.warning(f"[{symbol}] 未能获取历史数据，跳过本次检测")
+        return
+
+    # 数据量检查：技术指标需要足够数据
+    min_required = max(MACD_SLOW + MACD_SIGNAL, KDJ_N, VOL_MA_DAYS) + 10
+    if len(hist_df) < min_required:
+        logger.warning(f"[{symbol}] 历史数据不足({len(hist_df)}条)，需要至少{min_required}条，跳过")
         return
 
     # 实时价格
@@ -184,7 +184,7 @@ def run_check(symbol: str, history_days: int, logger: logging.Logger) -> None:
     )
     advice = generate_comprehensive_advice(score, score_desc, reasons)
 
-    # 信号确认防抖（B2）
+    # 信号确认防抖
     score_desc, advice = _apply_signal_confirmation(symbol, score, score_desc, advice)
 
     # 最新值
@@ -290,6 +290,8 @@ def main() -> int:
                 run_check(code, args.history_days, logger)
             except Exception as e:
                 logger.error(f"[{code}] 检测异常: {e}", exc_info=True)
+            # 标的间增加间隔，避免连续请求触发反爬
+            time.sleep(1)
         time.sleep(args.interval)
 
 

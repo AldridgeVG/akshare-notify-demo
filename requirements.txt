@@ -1,1 +1,4 @@
-akshare==1.17.94
+akshare>=1.17.94
+pandas>=2.0.0
+numpy>=1.24.0
+pyyaml>=6.0
