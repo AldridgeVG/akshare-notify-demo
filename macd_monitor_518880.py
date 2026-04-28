@@ -8,40 +8,44 @@ import akshare as ak
 import pandas as pd
 import numpy as np
 
+from config_loader import CONFIG, STRATEGY
+
 # ===================== 配置 =====================
-STOCK_CODE = "518880"          # 华安黄金ETF（上交所）
-STOCK_NAME = "黄金ETF"          # 用于日志显示
-POLL_INTERVAL = 60               # 轮询间隔（秒）
-HISTORY_DAYS = 120             # 历史日K线获取天数
+STOCK_CODE = CONFIG.get("stock", {}).get("code", "518880")
+STOCK_NAME = CONFIG.get("stock", {}).get("name", "黄金ETF")
+POLL_INTERVAL = CONFIG.get("monitor", {}).get("poll_interval", 60)
+HISTORY_DAYS = CONFIG.get("monitor", {}).get("history_days", 120)
 
 # MACD 参数
-MACD_FAST = 12
-MACD_SLOW = 26
-MACD_SIGNAL = 9
+MACD_FAST = CONFIG.get("indicators", {}).get("macd", {}).get("fast", 12)
+MACD_SLOW = CONFIG.get("indicators", {}).get("macd", {}).get("slow", 26)
+MACD_SIGNAL = CONFIG.get("indicators", {}).get("macd", {}).get("signal", 9)
 
 # KDJ 参数
-KDJ_N = 9
-KDJ_M1 = 3   # K 平滑系数
-KDJ_M2 = 3   # D 平滑系数
+KDJ_N = CONFIG.get("indicators", {}).get("kdj", {}).get("n", 9)
+KDJ_M1 = CONFIG.get("indicators", {}).get("kdj", {}).get("m1", 3)
+KDJ_M2 = CONFIG.get("indicators", {}).get("kdj", {}).get("m2", 3)
 
 # 成交量参数
-VOL_MA_DAYS = 20               # 成交量均线周期
-VOL_RATIO_THRESHOLD = 1.50   # 量比 > 1.5 视为显著放量
-VOL_RATIO_SHRINK = 0.60      # 量比 < 0.6 视为显著缩量
+VOL_MA_DAYS = CONFIG.get("indicators", {}).get("volume", {}).get("ma_days", 20)
 
 # 显著红绿柱判定阈值
-BAR_SIGNIFICANT_RATIO = 1.30   # 当前柱体较近期同色系平均柱体放大30%视为显著
-BAR_RECENT_N = 5               # 近期参考柱体数量
+BAR_SIGNIFICANT_RATIO = STRATEGY.get("macd_bar", {}).get("significant_ratio", 1.30)
+BAR_RECENT_N = STRATEGY.get("macd_bar", {}).get("recent_n", 5)
 
 # 背离检测参数
-DEV_LOOKBACK = 30              # 背离检测回溯天数
-PEAK_MIN_DISTANCE = 5          # 高低点最小距离
+DEV_LOOKBACK = STRATEGY.get("divergence", {}).get("lookback", 30)
+PEAK_MIN_DISTANCE = STRATEGY.get("divergence", {}).get("peak_min_distance", 5)
+
+# 成交量策略参数
+VOL_RATIO_THRESHOLD = STRATEGY.get("volume", {}).get("ratio_threshold", 1.50)
+VOL_RATIO_SHRINK = STRATEGY.get("volume", {}).get("ratio_shrink", 0.60)
 
 # 综合评分阈值
-SCORE_STRONG_BUY = 3           # 强烈买入评分阈值
-SCORE_BUY = 2                  # 买入评分阈值
-SCORE_SELL = -2                # 卖出评分阈值
-SCORE_STRONG_SELL = -3         # 强烈卖出评分阈值
+SCORE_STRONG_BUY = STRATEGY.get("score", {}).get("strong_buy", 3)
+SCORE_BUY = STRATEGY.get("score", {}).get("buy", 2)
+SCORE_SELL = STRATEGY.get("score", {}).get("sell", -2)
+SCORE_STRONG_SELL = STRATEGY.get("score", {}).get("strong_sell", -3)
 
 # 日志配置
 logging.basicConfig(

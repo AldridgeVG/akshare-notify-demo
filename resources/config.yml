@@ -1,0 +1,24 @@
+# ===================== 核心运行配置 =====================
+
+# 监控标的
+stock:
+  code: "518880"      # ETF 代码（上交所华安黄金ETF）
+  name: "黄金ETF"      # 日志展示名称
+
+# 监控行为
+monitor:
+  poll_interval: 60   # 轮询间隔（秒）
+  history_days: 120   # 历史日K线获取天数
+
+# 技术指标参数
+indicators:
+  macd:
+    fast: 12          # DIF 快线周期
+    slow: 26          # DIF 慢线周期
+    signal: 9         # DEA 平滑周期
+  kdj:
+    n: 9              # RSV 计算周期
+    m1: 3             # K 平滑系数
+    m2: 3             # D 平滑系数
+  volume:
+    ma_days: 20       # 成交量均线周期

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import akshare as ak
 
+from config_loader import CONFIG
 from macd_monitor_518880 import (
     MACD_FAST, MACD_SLOW, MACD_SIGNAL,
     KDJ_N, KDJ_M1, KDJ_M2, VOL_MA_DAYS,
@@ -23,18 +24,24 @@ from macd_monitor_518880 import (
 
 LOG_DIR = Path("logs")
 
+# 从 config.yml 读取默认值，命令行参数可覆盖
+_STOCK_CFG = CONFIG.get("stock", {})
+_MONITOR_CFG = CONFIG.get("monitor", {})
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="ETF 多指标实时监控（MACD + KDJ + 成交量）",
     )
-    parser.add_argument("-c", "--code", default="518880",
+    parser.add_argument("-c", "--code", default=_STOCK_CFG.get("code", "518880"),
                         help="ETF 代码，默认 518880（华安黄金ETF）")
-    parser.add_argument("-n", "--name", default="",
+    parser.add_argument("-n", "--name", default=_STOCK_CFG.get("name", ""),
                         help="ETF 名称（仅用于日志显示）")
-    parser.add_argument("-i", "--interval", type=int, default=60,
+    parser.add_argument("-i", "--interval", type=int,
+                        default=_MONITOR_CFG.get("poll_interval", 60),
                         help="轮询间隔（秒），默认 60")
-    parser.add_argument("-d", "--history-days", type=int, default=120,
+    parser.add_argument("-d", "--history-days", type=int,
+                        default=_MONITOR_CFG.get("history_days", 120),
                         help="历史 K 线获取天数，默认 120")
     parser.add_argument("--once", action="store_true",
                         help="只执行一次检测，不进入循环")

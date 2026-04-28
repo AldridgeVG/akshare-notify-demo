@@ -1,0 +1,24 @@
+# ===================== 决策策略配置 =====================
+# 以下参数影响信号检测与评分逻辑，修改前请理解各阈值含义。
+
+# 成交量策略
+volume:
+  ratio_threshold: 1.50   # 量比 > 1.5 视为显著放量
+  ratio_shrink: 0.60      # 量比 < 0.6 视为显著缩量
+
+# MACD 柱体策略
+macd_bar:
+  significant_ratio: 1.30   # 当前柱体较近期同色系均值放大 30% 视为显著
+  recent_n: 5               # 近期参考柱体数量
+
+# 背离检测策略
+divergence:
+  lookback: 30              # 背离检测回溯天数
+  peak_min_distance: 5      # 高低点最小距离
+
+# 综合评分阈值
+score:
+  strong_buy: 3             # 强烈买入评分阈值
+  buy: 2                    # 买入评分阈值
+  sell: -2                  # 卖出评分阈值
+  strong_sell: -3           # 强烈卖出评分阈值
