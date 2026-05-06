@@ -1,30 +1,32 @@
 # akshare-notify-demo
 
-基于 [AKShare](https://github.com/akfamily/akshare) 的 ETF 多指标实时监控工具，结合 **MACD + KDJ + 成交量** 给出综合操作建议。
+基于 [AKShare](https://github.com/akfamily/akshare) 的 ETF 日K多指标定时分析工具，结合 **MACD + KDJ + 成交量** 给出综合操作建议。
 
-支持**日线**和**分钟级分时（MACDFS）**双周期，可多标的串行轮询。
+支持多标的串行分析，每天指定时间自动执行（默认 08:00 / 20:00），也支持单次立即运行。
 
 ## 安装
 
 ```bash
-pip install akshare pandas numpy pyyaml
+pip install -r requirements.txt
+```
+
+或手动安装：
+
+```bash
+pip install akshare pandas numpy pyyaml schedule
 ```
 
 ## 快速开始
 
 ```bash
-# 日线监控默认标的（518880）
+# 定时模式：读取 config.yml 中的默认标的列表，每天 08:00 / 20:00 自动执行
 python main.py
 
-# 多标的同时监控
+# 指定多个标的
 python main.py -cs 518880,512880,510300
 
-# 只执行一次检测
+# 只执行一次检测，不进入定时循环
 python main.py --once
-
-# 5 分钟 MACDFS
-# （先在 resources/config.yml 中将 period 改为 "5min"）
-python main.py -cs 518880
 ```
 
 ## 命令行参数
@@ -33,9 +35,8 @@ python main.py -cs 518880
 | --- | --- |
 | `-c, --code` | 单个 ETF 代码 |
 | `-cs, --codes` | 多个 ETF 代码，逗号分隔，例如 `518880,512880` |
-| `-i, --interval` | 轮询间隔（秒），**默认根据周期自动选择** |
-| `-d, --history-days` | 历史 K 线天数 |
-| `--once` | 只执行一次后退出 |
+| `-d, --history-days` | 历史日K线天数，默认 120 |
+| `--once` | 只执行一次后退出，不进入定时循环 |
 
 ## 配置说明
 
@@ -45,12 +46,17 @@ python main.py -cs 518880
 
 ```yaml
 stock:
-  code: "518880"          # 默认监控标的
+  codes:                  # 默认监控标的列表
+    - "510500"
+    - "512880"
+    - "512050"
 
 monitor:
-  poll_interval: 60       # 轮询间隔（秒），未指定时按周期自动选择
-  history_days: 120       # 历史 K 线获取天数
-  period: "daily"         # 数据周期: daily | 1min | 5min | 15min | 30min | 60min
+  schedule_times:         # 每天定时执行时间点
+    - "08:00"
+    - "20:00"
+  history_days: 120       # 历史日K线获取天数
+  period: "daily"         # 固定日线（仅保留该字段兼容，实际只支持 daily）
 
 indicators:
   macd:
@@ -95,8 +101,10 @@ score:
 - **KDJ**：金叉/死叉、超买(J>100)/超卖(J<0)、背离
 - **成交量**：放量/缩量、量价配合判断（量比 + 涨跌幅耦合）
 - **综合评分**：多指标加权，按阈值输出"强烈看多 / 偏多 / 观望 / 偏空 / 强烈看空"建议
-- **强烈信号强调**：当检测到显著柱体、背离、强 KDJ 信号或评分达强烈级别时，日志中会用 `⚠ 强烈信号` 区块醒目标识
-- **自动周期适配**：切换 `config.yml` 中的 `period` 即可在日线与分钟级（1/5/15/30/60min）之间切换，数据源与轮询间隔自动适配
+- **强烈信号强调**：当检测到显著柱体、背离、强 KDJ 信号或评分达强烈级别时，日志中会用 `[!] 强烈信号` 区块醒目标识
+- **信号确认防抖**：评分级别需连续 2 次一致才会确认切换，避免噪音信号干扰
+- **定时任务调度**：默认每天 08:00 和 20:00 自动执行，支持自定义时间点
+- **启动立即执行**：进入定时循环前先执行一次分析，方便验证配置
 - **ETF 名称自动识别**：从 AKShare 接口实时获取，无需手动指定
 
 ## 输出
@@ -116,7 +124,7 @@ score:
     KDJ      K:    45.67      D:    42.31      J:    52.39
     成交   量比:     1.25   均量:    123,456   现量:    154,320
 ------------------------------------------------------------
-  ⚠ 强烈信号
+  [!] 强烈信号
     >>> [MACD柱体] 显著红柱(柱高=0.0068, 近期均值=0.0045)
     >>> [综合评分] 强烈看多(评分:5)
 ------------------------------------------------------------
@@ -138,6 +146,7 @@ akshare-notify-demo/
 ├── main.py                          # 命令行入口
 ├── macd_monitor.py                  # 指标计算与信号检测核心模块
 ├── config_loader.py                 # YAML 配置加载器
+├── requirements.txt                 # Python 依赖
 ├── resources/
 │   ├── config.yml                   # 核心运行配置
 │   ├── strategy.yml                 # 决策策略配置
