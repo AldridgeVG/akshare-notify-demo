@@ -1,6 +1,7 @@
-"""ETF 多指标实时监控 - 命令行入口
+"""ETF 日K多指标定时分析 - 命令行入口
 
-支持单标的或多标的串行轮询，名称自动从 AKShare 接口获取。
+每天指定时间（默认 08:00 / 20:00）对所有配置的行业 ETF 执行一次日线分析。
+支持单标的或多标的串行分析，名称自动从 AKShare 接口获取。
 """
 import argparse
 import logging
@@ -11,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 import akshare as ak
+import schedule
 
 from config_loader import CONFIG
 from macd_monitor import (
@@ -72,34 +74,29 @@ def _apply_signal_confirmation(code: str, score: int, score_desc: str, advice: s
     return pending_desc, pending_advice
 
 
-def _default_interval() -> int:
-    period = _MONITOR_CFG.get("period", "daily")
-    return {
-        "daily": 300,  # 日线数据 5 分钟轮询足够
-        "1min": 30,
-        "5min": 120,
-        "15min": 300,
-        "30min": 600,
-        "60min": 1200,
-    }.get(period, 300)
+def _default_codes() -> list[str]:
+    """从配置文件读取默认 ETF 代码列表。"""
+    cfg_codes = CONFIG.get("stock", {}).get("codes", [])
+    if cfg_codes:
+        return [str(c).strip() for c in cfg_codes if str(c).strip()]
+    # 兼容旧版单代码配置
+    single = CONFIG.get("stock", {}).get("code", "518880")
+    return [str(single).strip()]
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="ETF 多指标实时监控（MACD + KDJ + 成交量）",
+        description="ETF 日K多指标定时分析（MACD + KDJ + 成交量）",
     )
     parser.add_argument("-c", "--code", default="",
                         help="单个 ETF 代码，例如 518880")
     parser.add_argument("-cs", "--codes", default="",
                         help="多个 ETF 代码，逗号分隔，例如 518880,512880")
-    parser.add_argument("-i", "--interval", type=int,
-                        default=_MONITOR_CFG.get("poll_interval") or _default_interval(),
-                        help="轮询间隔（秒），默认根据周期自动选择")
     parser.add_argument("-d", "--history-days", type=int,
                         default=_MONITOR_CFG.get("history_days", 120),
                         help="历史 K 线获取天数，默认 120")
     parser.add_argument("--once", action="store_true",
-                        help="只执行一次检测，不进入循环")
+                        help="只执行一次检测，不进入定时循环")
     return parser.parse_args()
 
 
@@ -151,19 +148,19 @@ def run_check(symbol: str, history_days: int, logger: logging.Logger) -> None:
         logger.warning(f"[{symbol}] 历史数据不足({len(hist_df)}条)，需要至少{min_required}条，跳过")
         return
 
-    # 实时价格
+    # 实时价格（日线分析场景下用于更新当日最新价）
     spot = fetch_spot_price(symbol)
     if spot is not None:
         latest_price, data_date_str, data_time_str = spot
         price_info = (
-            f"实时价格: {latest_price:.3f}  |  "
+            f"最新价: {latest_price:.3f}  |  "
             f"数据时间: {data_date_str} {data_time_str}"
         )
         hist_df = hist_df.copy()
         hist_df.loc[hist_df.index[-1], "close"] = latest_price
     else:
         latest_price = hist_df["close"].iloc[-1]
-        price_info = f"实时价格: 未获取  |  最新收盘: {latest_price:.3f}"
+        price_info = f"最新价: 未获取  |  最新收盘: {latest_price:.3f}"
 
     # 计算指标
     macd_df = compute_macd(hist_df["close"], MACD_FAST, MACD_SLOW, MACD_SIGNAL)
@@ -228,7 +225,7 @@ def run_check(symbol: str, history_days: int, logger: logging.Logger) -> None:
     ]
 
     if strong_signals:
-        lines.append("  ⚠ 强烈信号")
+        lines.append("  [!] 强烈信号")
         for sig in strong_signals:
             lines.append(f"    >>> {sig}")
         lines.append("-" * 60)
@@ -251,48 +248,65 @@ def run_check(symbol: str, history_days: int, logger: logging.Logger) -> None:
     _log_block(logger, lines)
 
 
+def run_all(codes: list[str], history_days: int, logger: logging.Logger) -> None:
+    """对所有 ETF 执行一次完整的日K分析。"""
+    logger.info("=" * 60)
+    logger.info(f"开始日K分析轮次 | 标的数: {len(codes)} | 列表: {', '.join(codes)}")
+    logger.info("=" * 60)
+
+    for code in codes:
+        try:
+            run_check(code, history_days, logger)
+        except Exception as e:
+            logger.error(f"[{code}] 检测失败: {e}", exc_info=True)
+        # 标的间增加间隔，避免连续请求触发反爬
+        time.sleep(1)
+
+    logger.info("=" * 60)
+    logger.info("本轮日K分析全部完成")
+    logger.info("=" * 60)
+
+
 def main() -> int:
     args = parse_args()
 
-    # 解析代码列表：-cs 优先，否则回退到 -c，最后再回退到 config.yml
+    # 解析代码列表：-cs 优先，否则回退到 -c，最后再回退到 config.yml 的 codes
     if args.codes:
         codes = [c.strip() for c in args.codes.split(",") if c.strip()]
     elif args.code:
         codes = [args.code.strip()]
     else:
-        codes = [CONFIG.get("stock", {}).get("code", "518880")]
+        codes = _default_codes()
 
     logger = setup_logger()
 
     logger.info("=" * 60)
-    logger.info(f"ETF 多指标监控启动 | 标的数: {len(codes)} | 列表: {', '.join(codes)}")
+    logger.info(f"ETF 日K多指标分析启动 | 标的数: {len(codes)} | 列表: {', '.join(codes)}")
     logger.info(f"AKShare 版本: {ak.__version__}")
-    logger.info(
-        f"轮询间隔: {args.interval}s | 历史天数: {args.history_days} | "
-        f"模式: {'单次' if args.once else '循环'}"
-    )
+    logger.info(f"历史天数: {args.history_days} | 周期: daily | 模式: {'单次' if args.once else '定时'}")
     logger.info("=" * 60)
 
     if args.once:
-        for code in codes:
-            try:
-                run_check(code, args.history_days, logger)
-            except Exception as e:
-                logger.error(f"[{code}] 检测失败: {e}", exc_info=True)
+        run_all(codes, args.history_days, logger)
         return 0
 
-    loop_count = 0
+    # 定时模式：读取配置中的 schedule_times，默认 08:00 和 20:00
+    schedule_times = _MONITOR_CFG.get("schedule_times", ["08:00", "20:00"])
+    if not schedule_times:
+        schedule_times = ["08:00", "20:00"]
+
+    for t in schedule_times:
+        schedule.every().day.at(t).do(run_all, codes, args.history_days, logger)
+        logger.info(f"已注册定时任务: 每天 {t} 执行分析")
+
+    logger.info("进入定时等待循环，按 Ctrl+C 退出...")
+
+    # 立即执行一次，方便启动时看到效果
+    run_all(codes, args.history_days, logger)
+
     while True:
-        loop_count += 1
-        logger.info(f"--- 第 {loop_count} 轮检测 ---")
-        for code in codes:
-            try:
-                run_check(code, args.history_days, logger)
-            except Exception as e:
-                logger.error(f"[{code}] 检测异常: {e}", exc_info=True)
-            # 标的间增加间隔，避免连续请求触发反爬
-            time.sleep(1)
-        time.sleep(args.interval)
+        schedule.run_pending()
+        time.sleep(30)
 
 
 if __name__ == "__main__":

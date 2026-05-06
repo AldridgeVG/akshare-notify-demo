@@ -10,8 +10,12 @@ import pandas as pd
 from config_loader import CONFIG, STRATEGY
 
 # ===================== 配置 =====================
-STOCK_CODE = CONFIG.get("stock", {}).get("code", "518880")
-POLL_INTERVAL = CONFIG.get("monitor", {}).get("poll_interval", 60)
+_cfg_stock = CONFIG.get("stock", {})
+STOCK_CODE = "518880"
+if _cfg_stock.get("codes"):
+    STOCK_CODE = str(_cfg_stock["codes"][0]).strip()
+elif _cfg_stock.get("code"):
+    STOCK_CODE = str(_cfg_stock["code"]).strip()
 HISTORY_DAYS = CONFIG.get("monitor", {}).get("history_days", 120)
 
 # MACD 参数

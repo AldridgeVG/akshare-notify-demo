@@ -1,14 +1,22 @@
 # ===================== 核心运行配置 =====================
 
-# 监控标的
+# 监控标的（主要行业 ETF）
 stock:
-  code: "518880"      # ETF 代码（上交所华安黄金ETF）
+  codes:
+    - "510500"   # 中证500ETF
+    - "512880"   # 证券ETF
+    - "512050"   # A50ETF
+    - "588000"   # 科创50ETF
+    - "519949"   # 华夏科创50ETF联接
+    - "512480"   # 半导体ETF
 
 # 监控行为
 monitor:
-  poll_interval: 60   # 轮询间隔（秒），未指定时根据 period 自动选择
-  history_days: 120   # 历史日K线获取天数（分钟级会自动缩小）
-  period: "daily"     # 数据周期: daily | 1min | 5min | 15min | 30min | 60min
+  schedule_times:
+    - "08:00"
+    - "20:00"
+  history_days: 120   # 历史日K线获取天数
+  period: "daily"     # 数据周期: daily（固定日线）
 
 # 技术指标参数
 indicators:
